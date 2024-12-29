@@ -1,0 +1,69 @@
+import numpy as np
+from osgeo import gdal
+
+def gram_schmidt(ms_file_path, pan_file_path):
+    # Load Multispectral Image (MSImage)
+    ms_dataset = gdal.Open(ms_file_path)
+    ms_image = ms_dataset.ReadAsArray().astype(np.float64)
+
+    # Load Panchromatic Image (Pan)
+    pan_dataset = gdal.Open(pan_file_path)
+    pan = pan_dataset.ReadAsArray().astype(np.float64)
+
+    # Ensure MSImage is in (rows, cols, bands) format
+    if ms_image.ndim == 3:
+        ms_image = np.moveaxis(ms_image, 0, -1)
+
+    rows, cols, bands = ms_image.shape
+
+    # Calculate low-resolution intensity image (mean of bands)
+    low_resol = np.mean(ms_image, axis=2)
+
+    # Initialize GS structure
+    gs = [low_resol]
+
+    # Gram-Schmidt process
+    for band in range(bands):
+        ms_band = ms_image[:, :, band]
+        ms_band[np.isnan(ms_band)] = 0
+        pan[np.isnan(pan)] = 0
+
+        coeff_ms_image = []
+        for temp_band in range(len(gs)):
+            gs_band = gs[temp_band]
+            cov_matrix = np.cov(ms_band.ravel(), gs_band.ravel())
+            var_gs = cov_matrix[1, 1]
+            covar_ms_image = cov_matrix[0, 1]
+            coeff_ms_image.append(covar_ms_image / var_gs)
+
+        combined = sum(coeff * gs_band for coeff, gs_band in zip(coeff_ms_image, gs))
+        difference = ms_band - np.mean(ms_band)
+        new_gs_band = difference - combined
+        gs.append(new_gs_band)
+
+    # Modify Pan to match GS1 statistics
+    gs1_mean, gs1_std = np.mean(gs[0]), np.std(gs[0])
+    pan_mean, pan_std = np.mean(pan), np.std(pan)
+
+    pan_mod = (pan * (gs1_std / pan_std)) + gs1_mean - (gs1_std / pan_std) * pan_mean
+    gs[0] = pan_mod
+
+    # Reconstruct final GSImage
+    gs_image = np.zeros_like(ms_image)
+    for h in range(bands):
+        band_image = ms_image[:, :, h]
+        mean_band = np.mean(band_image)
+        gs_image[:, :, h] = gs[h + 1] + mean_band + sum(
+            coeff * gs_band for coeff, gs_band in zip(coeff_ms_image, gs[:h + 1])
+        )
+
+    return gs_image
+
+# File paths
+ms_file_path = r"..."
+pan_file_path = r"..."
+
+# Run Gram-Schmidt process
+gs_image = gram_schmidt(ms_file_path, pan_file_path)
+
+print("Gram-Schmidt process completed.")
